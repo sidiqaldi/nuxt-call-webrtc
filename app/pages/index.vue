@@ -35,7 +35,6 @@ const isScreenSharing = computed(() => {
   return screenShare.value?.isScreenSharing ?? false
 })
 
-// populate callId from the URL but don't automatically join the call
 const isClient = import.meta.client
 
 if (isClient && route.query.call) {
@@ -63,13 +62,11 @@ const joinCall = async () => {
     await signaling.value?.joinCall()
     inCall.value = true
 
-    // after we've joined we know the call document reference exists
     const callDoc = signaling.value?.getCallDoc()
     if (callDoc) {
       await updateDoc(callDoc, { calleeLeft: false })
     }
 
-    // if we weren't already using the query parameter, update it so share links work
     if (isClient && !route.query.call) {
       await router.replace({ query: { call: callId.value } })
     }
@@ -142,17 +139,14 @@ const setupAutoReconnect = () => {
   if (!peerConnection) return
 
   peerConnection.addEventListener("iceconnectionstatechange", async () => {
-
     const state = peerConnection?.iceConnectionState
 
     console.log("ICE state:", state)
 
     if (state === "failed" || state === "disconnected") {
-
       console.warn("ICE reconnect triggered")
 
       try {
-
         const offer = await peerConnection!.createOffer({
           iceRestart: true
         })
@@ -169,7 +163,6 @@ const setupAutoReconnect = () => {
             sdp: offer.sdp
           }
         })
-
       } catch (err) {
         console.error("ICE restart failed", err)
       }
@@ -177,7 +170,6 @@ const setupAutoReconnect = () => {
   })
 }
 
-// clean up listeners and close peer connection when component unmounts
 onBeforeUnmount(() => {
   window.removeEventListener("beforeunload", cleanupCall)
   if (peerConnection) {
@@ -186,7 +178,6 @@ onBeforeUnmount(() => {
 })
 
 onMounted(async () => {
-
   try {
     localStream = await navigator.mediaDevices.getUserMedia({
       video: true,
@@ -198,7 +189,6 @@ onMounted(async () => {
     }
 
     peerConnection = new RTCPeerConnection(configuration)
-
     setupAutoReconnect()
 
     signaling.value = useCallSignaling(
@@ -233,12 +223,9 @@ onMounted(async () => {
       }
     }
 
-    // no automatic joining anymore; the user has to click the "Join Call" button when ready
-
     peerConnection.addEventListener("connectionstatechange", () => {
       console.log("Peer state:", peerConnection?.connectionState)
     })
-
   } catch (err) {
     console.error(err)
   }
@@ -246,9 +233,7 @@ onMounted(async () => {
 
 const callLink = computed(() => {
   if (!callId.value) return ""
-  if (isClient) {
-    return `${window.location.origin}?call=${callId.value}`
-  }
+  if (isClient) return `${window.location.origin}?call=${callId.value}`
   return ""
 })
 
@@ -275,7 +260,8 @@ const cleanupCall = async () => {
     <div v-if="!inCall" class="flex flex-col gap-1">
       <div class="flex gap-3">
         <input v-model="callId" placeholder="Enter Call ID" class="border px-3 py-2 rounded" />
-        <button @click="joinCall" :disabled="!callId" class="px-6 py-2 bg-green-600 text-white rounded disabled:opacity-50">
+        <button @click="joinCall" :disabled="!callId"
+          class="px-6 py-2 bg-green-600 text-white rounded disabled:opacity-50">
           Join Call
         </button>
       </div>

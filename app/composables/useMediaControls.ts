@@ -5,9 +5,7 @@ export function useMediaControls(
   peerConnection: RTCPeerConnection,
   localVideo: Ref<HTMLVideoElement | null>
 ) {
-
   const toggleMic = (isMicMuted: Ref<boolean>) => {
-
     const audioTrack = localStream.getAudioTracks()[0]
 
     if (!audioTrack) return
@@ -15,13 +13,11 @@ export function useMediaControls(
     audioTrack.enabled = !audioTrack.enabled
 
     isMicMuted.value = !audioTrack.enabled
-
   }
 
   const toggleCamera = async (
     isCameraOff: Ref<boolean>
   ) => {
-
     const sender = peerConnection
       .getSenders()
       .find(s => s.track?.kind === "video")
@@ -29,7 +25,6 @@ export function useMediaControls(
     if (!sender) return
 
     if (!isCameraOff.value) {
-
       const blackTrack = createBlackVideoTrack() ?? null
 
       sender.replaceTrack(blackTrack)
@@ -39,9 +34,7 @@ export function useMediaControls(
       oldTrack?.stop()
 
       isCameraOff.value = true
-
     } else {
-
       const stream = await navigator.mediaDevices.getUserMedia({
         video: true
       })
@@ -65,14 +58,10 @@ export function useMediaControls(
       }
 
       isCameraOff.value = false
-
     }
-
   }
-
   return {
     toggleMic,
     toggleCamera
   }
-
 }
