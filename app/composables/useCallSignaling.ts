@@ -8,6 +8,7 @@ import {
   setDoc,
   updateDoc
 } from 'firebase/firestore'
+import { ref } from 'vue'
 import type {
   DocumentReference,
   DocumentSnapshot,
@@ -19,29 +20,34 @@ export function useCallSignaling(
   router: ReturnType<typeof useRouter>,
   callId: Ref<string>,
   peerStatus: Ref<{ micMuted: boolean; cameraOff: boolean }>,
-  role: Ref<"caller" | "callee" | null>
+  role: Ref<"host" | "guest" | null>
 ) {
 
   let callDocRef: DocumentReference<DocumentData> | null = null
   const unsubscribers: (() => void)[] = []
   let lastAnswerSdp: string | null = null
   let lastOfferSdp: string | null = null
+  const peerLeft = ref(false)
 
   const createCall = async () => {
     cleanup() // clear any previous listeners
-    role.value = "caller"
+    role.value = "host"
+    console.log("[Host] Creating call...")
     const callDoc = doc(collection(db, "calls")) as DocumentReference<DocumentData>
     const offerCandidates = collection(callDoc, "offerCandidates")
     const answerCandidates = collection(callDoc, "answerCandidates")
 
     peerConnection.onicecandidate = (event) => {
       if (event.candidate) {
+        console.log("[Host] Got ICE candidate, adding to Firestore")
         addDoc(offerCandidates, event.candidate.toJSON())
       }
     }
 
     const offerDescription = await peerConnection.createOffer()
+    console.log("[Host] Created offer")
     await peerConnection.setLocalDescription(offerDescription)
+    console.log("[Host] Set local description")
 
     await setDoc(callDoc, {
       offer: {
@@ -49,6 +55,7 @@ export function useCallSignaling(
         sdp: offerDescription.sdp
       }
     })
+    console.log("[Host] Sent offer to Firestore, call ID:", callDoc.id)
 
     callId.value = callDoc.id
 
@@ -57,8 +64,9 @@ export function useCallSignaling(
 
       if (data?.answer) {
         const newAnswerSdp = data.answer.sdp
-        // Apply the answer if we haven't set one yet, or if a NEW answer arrived (callee reconnected)
+        // Apply the answer if we haven't set one yet, or if a NEW answer arrived (guest reconnected)
         if (!lastAnswerSdp || lastAnswerSdp !== newAnswerSdp) {
+          console.log("[Host] Got answer from guest, setting remote description")
           lastAnswerSdp = newAnswerSdp
           const answerDescription = new RTCSessionDescription(data.answer)
           peerConnection.setRemoteDescription(answerDescription).catch(err => {
@@ -81,13 +89,14 @@ export function useCallSignaling(
     unsubscribers.push(onSnapshot(callDoc, (snapshot: DocumentSnapshot<DocumentData>) => {
       const data = snapshot.data()
       if (!data) return
-      if (role.value === "caller" && data.calleeStatus) {
-        peerStatus.value = data.calleeStatus
+      if (role.value === "host" && data.guestStatus) {
+        peerStatus.value = data.guestStatus
       }
-      if (role.value === "callee" && data.callerStatus) {
-        peerStatus.value = data.callerStatus
+      if (role.value === "guest" && data.hostStatus) {
+        peerStatus.value = data.hostStatus
       }
-      if (data.callerLeft || data.calleeLeft) {
+      if (data.hostLeft || data.guestLeft) {
+        peerLeft.value = true
         console.warn("Peer left the call")
       }
     }))
@@ -101,7 +110,8 @@ export function useCallSignaling(
 
   const joinCall = async () => {
     cleanup() // clear any previous listeners
-    role.value = "callee"
+    role.value = "guest"
+    console.log("[Guest] Starting to join call:", callId.value)
 
     const callDoc = doc(db, "calls", callId.value) as DocumentReference<DocumentData>
     callDocRef = callDoc
@@ -111,37 +121,43 @@ export function useCallSignaling(
 
     peerConnection.onicecandidate = (event) => {
       if (event.candidate) {
+        console.log("[Guest] Got ICE candidate, adding to Firestore")
         addDoc(answerCandidates, event.candidate.toJSON())
       }
     }
 
     const callData = (await getDoc(callDoc)).data()
     const offerDescription = callData?.offer
+    console.log("[Guest] Got offer from host:", offerDescription?.type)
 
     await peerConnection.setRemoteDescription(
       new RTCSessionDescription(offerDescription)
     )
+    console.log("[Guest] Set remote description")
 
     lastOfferSdp = offerDescription.sdp
 
     const answerDescription = await peerConnection.createAnswer()
+    console.log("[Guest] Created answer")
     await peerConnection.setLocalDescription(answerDescription)
+    console.log("[Guest] Set local description")
     await updateDoc(callDoc, {
       answer: {
         type: answerDescription.type,
         sdp: answerDescription.sdp
       }
     })
+    console.log("[Guest] Sent answer to Firestore")
 
-    // Watch for offer changes (in case caller reconnected)
+    // Watch for offer changes (in case host reconnected)
     unsubscribers.push(onSnapshot(callDoc, (snapshot) => {
       const data = snapshot.data()
       if (data?.offer) {
         const newOfferSdp = data.offer.sdp
         // If we get a new offer (different from what we've seen), apply it
-        // This handles the case where the caller reconnected with a new offer
+        // This handles the case where the host reconnected with a new offer
         if (lastOfferSdp && lastOfferSdp !== newOfferSdp) {
-          console.log("New offer detected from caller reconnection, updating remote description")
+          console.log("New offer detected from host reconnection, updating remote description")
           lastOfferSdp = newOfferSdp
           peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer))
             .then(async () => {
@@ -170,6 +186,19 @@ export function useCallSignaling(
         }
       })
     }))
+
+    // Listen for host status updates and peer left events
+    unsubscribers.push(onSnapshot(callDoc, (snapshot: DocumentSnapshot<DocumentData>) => {
+      const data = snapshot.data()
+      if (!data) return
+      if (role.value === "guest" && data.hostStatus) {
+        peerStatus.value = data.hostStatus
+      }
+      if (data.hostLeft || data.guestLeft) {
+        peerLeft.value = true
+        console.warn("Peer left the call")
+      }
+    }))
   }
 
   const cleanup = () => {
@@ -178,6 +207,7 @@ export function useCallSignaling(
     // Reset SDP tracking so new offers/answers are applied on reconnect
     lastAnswerSdp = null
     lastOfferSdp = null
+    peerLeft.value = false
   }
 
   const hangUp = async () => {
@@ -185,15 +215,15 @@ export function useCallSignaling(
 
     if (!callDocRef) return
 
-    if (role.value === "caller") {
+    if (role.value === "host") {
       await updateDoc(callDocRef, {
-        callerLeft: true
+        hostLeft: true
       })
     }
 
-    if (role.value === "callee") {
+    if (role.value === "guest") {
       await updateDoc(callDocRef, {
-        calleeLeft: true
+        guestLeft: true
       })
     }
   }
@@ -202,6 +232,7 @@ export function useCallSignaling(
     createCall,
     joinCall,
     hangUp,
-    getCallDoc: () => callDocRef
+    getCallDoc: () => callDocRef,
+    peerLeft
   }
 }
